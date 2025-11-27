@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>關西九日遊數位導遊與協作記帳</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Babel for JSX transformation in browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* iOS Safe Area Support */
+        .pb-safe {
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+        
+        /* Custom Scrollbar for nicer look */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+    </style>
+</head>
+<body class="bg-stone-100">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useMemo, useCallback, useRef } from 'https://esm.sh/react@18.2.0';
+        import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
+        import { 
+            MapPin, Navigation, Calendar, DollarSign, Plane, ChevronDown, ChevronUp, 
+            Wallet, Trash2, AlertTriangle, Map, ShoppingBag, User, LogOut, Maximize 
+        } from 'https://esm.sh/lucide-react@0.292.0?deps=react@18.2.0';
+
+        // --- Firebase Imports ---
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { 
+            getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, 
+            signOut, setPersistence, browserSessionPersistence 
+        } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { 
+            getFirestore, doc, addDoc, deleteDoc, onSnapshot, collection, query, 
+            serverTimestamp, setLogLevel 
+        } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        // --- 靜態人孔蓋卡領取/庫存地點列表 ---
+        const STOCK_STATUS_LOCATIONS = [
+            { name: '臨空城案內所', hours: '09:00–20:00', prefCode: 27, prefecture: '大阪', stockUrl: 'https://www.city.izumisano.lg.jp/kakuka/jogesuidokyoku/jogesui/menu/1511934914176.html' },
+            { name: '大津車站觀光案内所', hours: '09:00–18:00', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.city.otsu.lg.jp/soshiki/080/2808/g/a/6.html' },
+            { name: 'くさつ夢本陣', hours: '09:30–17:00', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.city.kusatsu.shiga.jp/kurashi/suidogesuido/gesuido/manholecard.html' },
+            { name: '草津宿街道交流館', hours: '09:00–17:00', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.city.kusatsu.shiga.jp/kurashi/suidogesuido/gesuido/manholecard.html' },
+            { name: '栗東観光案内所', hours: '08:30–12:00', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.city.ritto.lg.jp/soshiki/jogeuido/jogesuido/oshirase/7224.html' },
+            { name: '栗東市立図書館', hours: '10:00–17:00', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.city.ritto.lg.jp/soshiki/jogeuido/jogesuido/oshirase/7224.html' },
+            { name: '守山市駅前総合案内所', hours: '07:30–19:30', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.city.moriyama.lg.jp/kurashitetsuzuki/jougesuido/1001701/1008797.html' },
+            { name: '八日市駅前観光交流施設', hours: '10:00–17:00', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.city.higashiomi.shiga.jp/kurashi_tetsuzuki/jougesuidou/1008975/1009690.html' },
+            { name: '東近江市役所 守衛室', hours: '10:00–16:00', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.city.higashiomi.shiga.jp/kurashi_tetsuzuki/jougesuidou/1008975/1008976.html' },
+            { name: '豊郷町観光案内所', hours: '09:00–17:00', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.town.toyosato.shiga.jp/0000001749.html' },
+            { name: '彥根市上下水道料金お客様サービスセンター', hours: '09:00–17:00', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.city.hikone.lg.jp/kakuka/jogesuido/2/2219.html' },
+            { name: 'ひこね食賓館四番町ダイニング', hours: '10:00–17:00', prefCode: 25, prefecture: '滋賀', stockUrl: 'https://www.city.hikone.lg.jp/kakuka/jogesuido/2/2219.html' },
+            { name: '「道の駅 海の京都 宮津」観光案内所', hours: '請查詢官網', prefCode: 26, prefecture: '京都', stockUrl: 'https://www.pref.kyoto.jp/gesuido/manholemiyazu.html' },
+            { name: '神戸空港 1 階総合案内所', hours: '06:30–22:00', prefCode: 28, prefecture: '兵庫', stockUrl: 'https://www.city.kobe.lg.jp/a78445/kurashi/sumai/sewage/pr/manhole_card.html' },
+            { name: '芦屋市役所守衛室', hours: '09:00–17:00', prefCode: 28, prefecture: '兵庫', stockUrl: 'https://www.city.ashiya.lg.jp/gesuidou/mhc.html' },
+            { name: '大阪観光案内所(JR 車站內)', hours: '07:00–21:00', prefCode: 27, prefecture: '大阪', stockUrl: 'https://www.city.osaka.lg.jp/kensetsu/page/0000431121.html' },
+            { name: '奈良町南観光案内所', hours: '09:00–17:00', prefCode: 29, prefecture: '奈良', stockUrl: 'https://h2o.nara.nara.jp/info_924.html' },
+            { name: '宇治市観光センター', hours: '09:00–17:00', prefCode: 26, prefecture: '京都', stockUrl: 'https://www.city.uji.kyoto.jp/soshiki/12/6038.html' },
+            { name: '大阪市下水道科學館', hours: '09:30–17:00', prefCode: 27, prefecture: '大阪', stockUrl: 'https://www.city.osaka.lg.jp/kensetsu/page/0000431121.html' },
+            { name: 'おおさか ATC グリーンエコプラザ', hours: '10:00–17:00', prefCode: 27, prefecture: '大阪', stockUrl: 'https://www.city.osaka.lg.jp/kensetsu/page/0000431121.html' },
+            { name: '堺東観光案内所', hours: '09:00–19:00', prefCode: 27, prefecture: '大阪', stockUrl: 'https://water.city.sakai.lg.jp/about/kouhou/1522311572373.html' },
+            { name: '岸和田駅前観光案内所', hours: '09:00–17:00', prefCode: 27, prefecture: '大阪', stockUrl: 'https://www.city.kishiwada.lg.jp/page/56-manholecard.html' },
+            { name: 'まちの駅かいづか', hours: '10:00–19:00', prefCode: 27, prefecture: '大阪', stockUrl: 'https://www.city.kaizuka.lg.jp/kakuka/jogesuido/gesuisuisin/topics/manholucard.html' },
+            { name: '泉佐野市観光情報センター', hours: '10:00–16:00', prefCode: 27, prefecture: '大阪', stockUrl: 'https://www.city.izumisano.lg.jp/kakuka/jogesuidokyoku/jogesui/menu/1511934914176.html' },
+        ];
+
+        // --- 輔助函數 ---
+        const getMapUrl = (location) => {
+            return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location)}`;
+        };
+
+        const openMap = (location) => {
+            const url = getMapUrl(location);
+            console.log("嘗試開啟 Google 地圖 (URL):", url);
+            window.open(url, '_blank');
+        };
+
+        const getExpenseCollectionPath = (appId) => `/artifacts/${appId}/public/data/expenses`;
+        const USER_NAME_KEY = 'travel_app_username';
+
+        // --- UI 組件 ---
+        const UserNameSetup = React.memo(({ nameInput, setNameInput, handleSetUserName, showNameWarning }) => (
+            <div className="p-4 bg-yellow-50 rounded-2xl border border-yellow-200 space-y-3 shadow-inner">
+                <h4 className="font-bold text-yellow-800 flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5 text-yellow-600" /> 設定您的記帳名稱 (必填)
+                </h4>
+                <p className="text-sm text-stone-600">請為自己設定一個旅行代號或名稱，用於協作記帳。</p>
+                {showNameWarning && (
+                    <div className="p-2 bg-red-100 text-red-700 rounded-lg text-xs font-medium flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4" /> 請先設定您的記帳名稱！
+                    </div>
+                )}
+                <div className="flex gap-2">
+                    <input
+                        type="text"
+                        placeholder="輸入您的名稱 (最多 15 字)"
+                        className="flex-1 p-2 bg-white border border-yellow-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500"
+                        value={nameInput}
+                        onChange={(e) => setNameInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSetUserName()}
+                        maxLength={15}
+                    />
+                    <button
+                        onClick={handleSetUserName}
+                        className="py-2 px-4 bg-yellow-600 text-white rounded-lg text-sm font-bold hover:bg-yellow-700 transition-colors"
+                        disabled={!nameInput.trim()}
+                    >
+                        確認設定
+                    </button>
+                </div>
+            </div>
+        ));
+
+        const StockStatusQuery = React.memo(() => {
+            return (
+                <div className="space-y-4">
+                    <div className="bg-white p-5 rounded-2xl shadow-sm border border-stone-100">
+                        <h3 className="font-bold text-stone-800 mb-3 flex items-center gap-2">
+                            <ShoppingBag className="w-5 h-5 text-indigo-600" /> 人孔蓋卡領取點 - 庫存查詢連結
+                        </h3>
+                        <p className="text-sm text-stone-500 mb-4">
+                            點擊下方任一地點卡片，將直接導向該地點所屬的官方庫存狀態頁面（在新視窗開啟）。
+                        </p>
+                        <div className="space-y-3"> 
+                            {STOCK_STATUS_LOCATIONS.map((card, index) => (
+                                <a
+                                    key={index} 
+                                    href={card.stockUrl}
+                                    target="_blank"      
+                                    rel="noopener noreferrer"
+                                    className="cursor-pointer block p-3 bg-stone-50 rounded-xl border border-stone-200 hover:bg-indigo-50 hover:border-indigo-300 transition-all duration-200 flex justify-between items-center group shadow-sm"
+                                    title={`前往 ${card.name} 庫存狀態網站 (在新視窗開啟)`}
+                                >
+                                    <div className="flex-1 min-w-0">
+                                        <span className="font-bold text-stone-800 truncate block group-hover:text-indigo-700 transition-colors">
+                                            {card.name} 
+                                        </span>
+                                        <p className="text-sm text-stone-500 mt-1 flex items-center gap-1">
+                                            <MapPin className="w-3 h-3 flex-shrink-0" /> 
+                                            <span className="font-semibold text-indigo-600">{card.prefecture}</span>
+                                            <span className="ml-2 font-bold text-stone-700">營業時間: {card.hours}</span>
+                                        </p>
+                                    </div>
+                                </a>
+                            ))}
+                        </div>
+                        <div className="mt-4 border-t border-stone-100 pt-3">
+                            <p className="text-xs text-stone-400">
+                                **注意：** 庫存狀態請務必以官方網站顯示的最新資訊為準。年末年始可能營業時間變動或公休。
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        });
+
+        const KansaiTravelApp = () => {
+            const [activeTab, setActiveTab] = useState('itinerary');
+            const [expandedDay, setExpandedDay] = useState(null); 
+            const [newExpense, setNewExpense] = useState({ item: '', cost: '' });
+            const [expenses, setExpenses] = useState([]); 
+            const dayRefs = useRef({}); 
+            const [db, setDb] = useState(null);
+            const [auth, setAuth] = useState(null);
+            const [userId, setUserId] = useState(null);
+            const [isAuthReady, setIsAuthReady] = useState(false);
+            const [userName, setUserName] = useState(null); 
+            const [nameInput, setNameInput] = useState(''); 
+            const [showNameWarning, setShowNameWarning] = useState(false); 
+
+            useEffect(() => {
+                // 模擬環境變數，若在非模擬環境請自行填入
+                const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'kansai-travel-app';
+                const firebaseConfig = typeof window.__firebase_config !== 'undefined' ? JSON.parse(window.__firebase_config) : {
+                    // 如果您有自己的 Firebase Config，請填在這裡
+                    // apiKey: "...",
+                    // authDomain: "...",
+                    // ...
+                };
+                const initialAuthToken = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
+
+                // 若無 config 則不初始化 (或顯示錯誤)
+                if (!firebaseConfig.apiKey && typeof window.__firebase_config === 'undefined') {
+                    console.warn("未檢測到 Firebase Config，記帳功能可能無法使用。");
+                    setIsAuthReady(true); // 讓 UI 顯示但無連線
+                    return;
+                }
+
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    const dbInstance = getFirestore(app);
+                    const authInstance = getAuth(app);
+                    setDb(dbInstance);
+                    setAuth(authInstance);
+
+                    setPersistence(authInstance, browserSessionPersistence)
+                        .then(() => {
+                            if (initialAuthToken) {
+                                return signInWithCustomToken(authInstance, initialAuthToken);
+                            } else {
+                                return signInAnonymously(authInstance);
+                            }
+                        })
+                        .catch((error) => console.error("Auth error:", error));
+
+                    const unsubscribeAuth = onAuthStateChanged(authInstance, (user) => {
+                        setUserId(user ? user.uid : null);
+                        setIsAuthReady(true);
+                    });
+
+                    const savedName = localStorage.getItem(USER_NAME_KEY);
+                    if (savedName) {
+                        setUserName(savedName);
+                        setNameInput(savedName);
+                    }
+
+                    return () => unsubscribeAuth();
+                } catch (error) {
+                    console.error("Firebase initialization failed:", error);
+                    setIsAuthReady(true);
+                }
+            }, []);
+
+            useEffect(() => {
+                if (!db || !isAuthReady || !userId) return;
+
+                const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'kansai-travel-app';
+                const expensesRef = collection(db, getExpenseCollectionPath(appId));
+                const q = query(expensesRef);
+
+                const unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
+                    const fetchedExpenses = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data(),
+                    })).sort((a, b) => {
+                        const dateA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAt || 0).getTime();
+                        const dateB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAt || 0).getTime();
+                        return dateB - dateA;
+                    });
+                    setExpenses(fetchedExpenses);
+                }, (error) => console.error("Firestore error:", error));
+
+                return () => unsubscribeSnapshot();
+            }, [db, isAuthReady, userId]);
+
+            const handleSetUserName = useCallback(() => {
+                if (nameInput.trim()) {
+                    const trimmedName = nameInput.trim();
+                    setUserName(trimmedName);
+                    localStorage.setItem(USER_NAME_KEY, trimmedName);
+                    setShowNameWarning(false); 
+                }
+            }, [nameInput]);
+
+            const handleAddExpense = useCallback(async () => {
+                if (!userName) {
+                    setShowNameWarning(true); 
+                    return;
+                }
+                if (!db || !userId) return;
+                
+                if (newExpense.item.trim() && newExpense.cost) {
+                    const expense = {
+                        item: newExpense.item.trim(),
+                        cost: parseInt(newExpense.cost),
+                        createdAt: serverTimestamp(),
+                        userId: userId,
+                        userName: userName,
+                    };
+                    try {
+                        const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'kansai-travel-app';
+                        await addDoc(collection(db, getExpenseCollectionPath(appId)), expense);
+                        setNewExpense({ item: '', cost: '' });
+                        setShowNameWarning(false);
+                    } catch (error) {
+                        console.error("Error adding doc:", error);
+                    }
+                }
+            }, [db, userId, userName, newExpense]);
+
+            const handleDeleteExpense = useCallback(async (id) => {
+                if (!db || !userId) return;
+                try {
+                    const appId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'kansai-travel-app';
+                    await deleteDoc(doc(db, getExpenseCollectionPath(appId), id));
+                } catch (error) {
+                    console.error("Error deleting doc:", error);
+                }
+            }, [db, userId]);
+
+            const toggleDay = useCallback((index) => {
+                setExpandedDay(prev => {
+                    const newIndex = prev === index ? null : index;
+                    if (newIndex !== null) {
+                        setTimeout(() => {
+                            const ref = dayRefs.current[index];
+                            if (ref) ref.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+                        }, 100); 
+                    }
+                    return newIndex;
+                });
+            }, []);
+
+            const totalBudget = useMemo(() => expenses.reduce((acc, curr) => acc + (curr.cost || 0), 0), [expenses]);
+
+            const itineraryData = useMemo(() => ([
+                { 
+                    id: 1, day: '12/27 (六)', title: '啟程：台北 → 大阪 → 草津', location: '大阪/滋賀', 
+                    spots: [
+                        { time: '11:15', name: '台灣桃園國際機場 (TPE)', type: 'transport', note: '客運大樓1' }, 
+                        { time: '14:55', name: '關西國際機場 (KIX)', type: 'transport', note: '客運大樓1 (抵達)' }, 
+                        { time: '15:30', name: '臨空城案內所', type: 'sight', note: '領取人孔蓋資訊或遊客服務 (09:00-20:00)' }, 
+                        { time: '16:30', name: '臨空城outlet', type: 'shopping', note: '購物時間 (10:00-20:00)' }, 
+                        { time: '18:00', name: '返回關西國際機場 (KIX)', type: 'transport', note: '搭乘接駁/電車返回機場' },
+                        { time: '18:30', name: '關西機場一航 → 京都車站 → 草津車站', type: 'transport', note: '轉乘 Haruka 或 JR 快速往滋賀' },
+                        { time: '20:30', name: '草津波士頓廣場飯店', type: 'hotel', note: 'Check-in' },
+                    ]
+                },
+                { 
+                    id: 2, day: '12/28 (日)', title: '滋賀深度巡禮：人孔蓋卡與彥根城', location: '滋賀', 
+                    spots: [
+                        { time: '09:00', name: 'トヨタレンタリース滋賀 草津駅西口店', type: 'transport', note: '取車' },
+                        { time: '09:30', name: 'くさつ夢本陣', type: 'sight', note: '09:30–17:00' },
+                        { time: '10:00', name: '草津宿街道交流館', type: 'sight', note: '09:00–17:00' },
+                        { time: '10:45', name: '栗東観光案内所二樓', type: 'sight', note: '重要：務必在 12:00 前到達，確認是否仍有庫存。' },
+                        { time: '11:30', name: '栗東市立図書館', type: 'sight', note: '10:00–17:00' },
+                        { time: '12:30', name: '守山市駅前総合案内所', type: 'sight', note: '07:30–19:30' },
+                        { time: '14:00', name: '八日市駅前観光交流施設', type: 'sight', note: '10:00–17:00' },
+                        { time: '14:45', name: '東近江市役所 守衛室', type: 'sight', note: '務必在 16:00 前到達領取！' },
+                        { time: '15:30', name: '豊郷町観光案内所', type: 'sight', note: '09:00–17:00' },
+                        { time: '16:30', name: '彥根市上下水道料金お客様サービスセンター', type: 'sight', note: '09:00–17:00' },
+                        { time: '17:00', name: 'ひこね食賓館四番町ダイニング', type: 'sight', note: '10:00–17:00 (預計閉館前到達)' },
+                        { time: '17:30', name: '彥根城 京橋口駐車場', type: 'transport', note: '停車' },
+                        { time: '17:45', name: '彥根城', type: 'sight', note: '注意：國寶五城之一，預計到達時天守閣可能已關閉 (08:30–17:00)' },
+                        { time: '18:30', name: 'MITSUI OUTLET PARK 滋賀龍王', type: 'shopping', note: '關西最大級 Outlet (10:00-20:00)' },
+                        { time: '20:30', name: '草津波士頓廣場飯店', type: 'hotel', note: '住宿' },
+                    ]
+                },
+                { 
+                    id: 3, day: '12/29 (一)', title: '海之京都：伊根與天橋立自駕巡禮', location: '京都北部/滋賀', 
+                    spots: [
+                        { time: '06:00', name: '草津波士頓廣場飯店', type: 'transport', note: 'Check-out & 啟程，自駕前往伊根灣 (約 3.5小時)' },
+                        { time: '09:30', name: '伊根湾賞景觀光船', type: 'sight', note: '09:00–16:30 (預計遊覽 1小時)' }, 
+                        { time: '10:45', name: '道の駅 海の京都 宮津観光案内所', type: 'sight', note: '09:00–18:00 (領取資訊或休息)' }, 
+                        { time: '11:30', name: '天橋立観光船のりば 天橋立駅', type: 'sight', note: '09:00–17:45 (天橋立區域開始)' },
+                        { time: '12:00', name: '午餐 (待補)', type: 'food', note: '建議在天橋立或宮津市區解決' },
+                        { time: '13:00', name: '丹後一宮 元伊勢 籠神社', type: 'sight', note: '07:30–17:00 (元伊勢神宮)' },
+                        { time: '14:00', name: '傘松公園', type: 'sight', note: '搭乘纜車/單軌電車上山，從北端觀賞天橋立' },
+                        { time: '15:30', name: '智恩寺', type: 'sight', note: '08:00–17:00 (文殊菩薩，天橋立入口)' }, 
+                        { time: '16:15', name: '天橋立神社', type: 'sight', note: '位於沙洲上的神社' },
+                        { time: '17:00', name: '天橋立ビューランド リフト・モノレール山麓駅', type: 'sight', note: '注意：預計到達時可能已停運 (09:00–16:00)，此為折返點' },
+                        { time: '17:30', name: '返回 草津波士頓廣場飯店', type: 'transport', note: '自駕返回草津 (約 3小時)' }, 
+                        { time: '20:30', name: '草津波士頓廣場飯店', type: 'hotel', note: 'Check-in' }, 
+                    ]
+                },
+                { 
+                    id: 4, day: '12/30 (二)', title: '琵琶湖靈氣：長濱、竹生島與大津', location: '長濱/大津/滋賀', 
+                    spots: [
+                        { time: '08:00', name: '草津波士頓廣場飯店', type: 'transport', note: '啟程，自駕前往長濱港 (約 1小時)' }, 
+                        { time: '09:15', name: '竹生島觀光船（長浜港／琵琶湖汽船）', type: 'transport', note: '搭乘船班，前往竹生島 (船班 08:30-16:30)' },
+                        { time: '10:00', name: '竹生島 宝厳寺', type: 'sight', note: '能量景點與參拜 (09:00-16:00)' }, 
+                        { time: '12:00', name: '返回長浜港', type: 'transport', note: '預計返抵長濱港並在附近午餐' },
+                        { time: '12:45', name: '黒壁スクエア (黑壁廣場)', type: 'shopping', note: '玻璃工藝街與購物 (10:00–17:00)' },
+                        { time: '14:30', name: '豊国神社 (長濱)', type: 'sight', note: '參拜 (09:00–17:00)' },
+                        { time: '16:30', name: '近江神宮', type: 'sight', note: '重要：參觀時間 (09:00–16:30)，務必準時到達！' },
+                        { time: '17:30', name: '返回 草津波士頓廣場飯店', type: 'transport', note: '自駕返回草津 (約 1小時車程)'}, 
+                        { time: '18:30', name: '草津波士頓廣場飯店', type: 'hotel', note: 'Check-in/住宿' }, 
+                    ]
+                },
+                { 
+                    id: 5, day: '12/31 (三)', title: '近江八幡：水鄉、山城與跨年夜', location: '近江八幡/滋賀', 
+                    spots: [
+                        { time: '08:00', name: '草津波士頓廣場飯店', type: 'transport', note: '啟程，自駕前往近江八幡（約 30 分鐘）' }, 
+                        { time: '08:30', name: '日牟禮八幡宮前 無料駐車場（里道）', type: 'transport', note: '停車 (08:30–17:00)' },
+                        { time: '09:00', name: '八幡山口纜車站', type: 'sight', note: '搭乘纜車上山 (09:00–17:00)' }, 
+                        { time: '10:00', name: '近江八幡山城跡', type: 'sight', note: '山頂觀景與古城跡' },
+                        { time: '11:30', name: '八幡堀遊船', type: 'sight', note: '搭乘遊船賞水鄉景色 (10:00–16:00)' },
+                        { time: '14:00', name: 'La Collina 近江八幡', type: 'food', note: '現烤年輪蛋糕與購物 (09:00–18:00, 附免費停車場)' },
+                        { time: '16:00', name: '返回 草津波士頓廣場飯店', type: 'transport', note: '自駕返回草津' },
+                        { time: '17:00', name: '草津波士頓廣場飯店', type: 'hotel', note: '跨年夜住宿' },
+                    ]
+                },
+                { 
+                    id: 6, day: '1/1 (四)', title: '新春參拜：神戶人孔蓋卡與關門點挑戰', location: '神戶/芦屋/大阪', 
+                    spots: [
+                        { time: '08:30', name: '草津波士頓廣場飯店', type: 'transport', note: 'Check-out，自駕前往京都車站 (約 1小時)' },
+                        { time: '09:30', name: 'REF 京都八條口by VESSEL HOTELS', type: 'hotel', note: 'Check-in/寄放行李。' },
+                        { time: '11:30', name: '生田神社', type: 'sight', note: '神戶戀愛結緣，參拜 (07:00–17:00)' }, 
+                        { time: '12:30', name: '北野天滿神社', type: 'sight', note: '參拜 (07:30–17:00)' },
+                        { time: '13:30', name: '午餐/三宮車站', type: 'food', note: '在三宮附近快速午餐' },
+                        { time: '14:00', name: '神戸空港 1 階総合案内所', type: 'sight', note: '人孔蓋卡領取點 (06:30–22:00)。從三宮搭 Port Liner 約 18 分鐘。' }, 
+                        { time: '15:20', name: '芦屋市役所守衛室', type: 'sight', note: '重要：人孔蓋卡領取點，必須在 17:00 關門前到達！' },
+                        { time: '17:00', name: '大鳥大社', type: 'transport', note: '從芦屋前往大鳥大社 (約 1 小時 15 分鐘車程)' },
+                        { time: '18:30', name: '大鳥大社', type: 'sight', note: '警告：預計到達時間已超時關門 (09:00–16:30)。建議改期。' },
+                        { time: '19:30', name: 'REF 京都八條口by VESSEL HOTELS', type: 'hotel', note: '返回京都住宿。' },
+                    ]
+                },
+                { 
+                    id: 7, day: '1/2 (五)', title: '奈良深度巡禮與人孔蓋卡挑戰', location: '奈良/宇治/京都', 
+                    spots: [
+                        { time: '08:00', name: 'REF 京都八條口by VESSEL HOTELS', type: 'transport', note: '從京都車站搭近鐵或 JR 前往奈良 (約 45-50 分鐘)' }, 
+                        { time: '09:00', name: '春日大社', type: 'sight', note: '新春參拜 (07:00–17:00)' }, 
+                        { time: '10:00', name: '東大寺二月堂', type: 'sight', note: '觀景點，免門票' },
+                        { time: '10:45', name: '東大寺', type: 'sight', note: '世界遺產，參觀大佛殿 (07:00–16:00)' }, 
+                        { time: '11:45', name: '奈良公園 (餵鹿)', type: 'sight', note: '與野生鹿互動' },
+                        { time: '12:15', name: '水谷茶屋', type: 'food', note: '午餐或輕食，注意營業時間 (11:00–15:30)' }, 
+                        { time: '13:00', name: '若草山', type: 'sight', note: '山腳觀景，或搭車上山 (視開放情況，冬季可能關閉)' },
+                        { time: '13:30', name: '御霊神社', type: 'sight', note: '奈良町內的神社 (10:00–16:00)。' },
+                        { time: '14:00', name: '奈良町南観光案内所', type: 'sight', note: '人孔蓋卡領取點 (09:00–17:00)' }, 
+                        { time: '14:30', name: '東向商店街', type: 'shopping', note: '購物與午茶/小吃' },
+                        { time: '16:15', name: '宇治駅 (抵達)', type: 'transport', note: '從車站步行至觀光中心 (約 10 分鐘)' },
+                        { time: '16:30', name: '宇治市観光センター', type: 'sight', note: '重要：人孔蓋卡領取點，必須在 17:00 關閉前到達！' },
+                        { time: '17:15', name: '伏見稻荷', type: 'transport', note: '搭 JR 奈良線前往稻荷/伏見區域 (約 20-30 分鐘)' },
+                        { time: '17:45', name: 'ちいかわもぐもぐ本舗 伏見店', type: 'shopping', note: '警告：預計到達時已超時關門 (09:30–17:30)，請務必在宇治提前約 30 分鐘！' },
+                        { time: '19:00', name: '返回 REF 京都八條口by VESSEL HOTELS', type: 'hotel', note: '住宿' },
+                    ]
+                },
+                { 
+                    id: 8, day: '1/3 (六)', title: '京都風雅：嵐山與河原町巡禮', location: '京都', 
+                    spots: [
+                        { time: '08:00', name: 'REF 京都八條口by VESSEL HOTELS', type: 'transport', note: '搭乘JR至嵯峨嵐山或公車/地鐵前往嵐山地區' }, 
+                        { time: '08:45', name: '天龍寺', type: 'sight', note: '世界遺產，曹源池庭園 (08:30–17:00)' }, 
+                        { time: '10:15', name: 'ホウオウ（京都府京都市）', type: 'sight', note: '寶可夢人孔蓋 (Pokéfuta) 地點，位於嵐山地區' },
+                        { time: '11:30', name: '仁和寺', type: 'sight', note: '世界遺產，御室櫻著名 (09:00–17:00)' },
+                        { time: '13:00', name: '午餐 (仁和寺/西院附近)', type: 'food', note: '午餐時間' },
+                        { time: '14:00', name: '平安神宮', type: 'transport', note: '搭乘公車或地鐵 (約 40 分鐘)' },
+                        { time: '14:45', name: '平安神宮', type: 'sight', note: '參觀與大鳥居 (06:00–17:00)' },
+                        { time: '16:30', name: '河原町', type: 'transport', note: '搭乘公車或地鐵前往四條河原町區域 (約 20 分鐘)' },
+                        { time: '17:00', name: '寶可夢中心京都店 2F', type: 'shopping', note: '位於高島屋 (10:00–20:00)' },
+                        { time: '18:00', name: 'ちいかわらんど 京都四条河原町店', type: 'shopping', note: '人氣角色專賣店 (11:00–21:00)，步行可達' },
+                        { time: '19:30', name: '晚餐 & 返回飯店', type: 'food', note: '晚餐後，返回 REF 京都八條口by VESSEL HOTELS' },
+                    ]
+                },
+                { 
+                    id: 9, day: '1/4 (日)', title: '歸途衝刺：大阪南部人孔蓋卡挑戰', location: '大阪/關西機場', 
+                    spots: [
+                        { time: '07:00', name: 'REF 京都八條口by VESSEL HOTELS', type: 'transport', note: '極限挑戰：Check-out，立即搭乘 JR 特急前往大阪，趕往 Cosmosquare' },
+                        { time: '09:30', name: '大阪市下水道科學館', type: 'sight', tag: '關門點', note: '人孔蓋卡領取點 (09:30–17:00)。' },
+                        { time: '10:15', name: 'おおさか ATC グリーンエコプラザ 11 樓', type: 'sight', tag: '關門點', note: '人孔蓋卡領取點 (10:00–17:00)。位於下水道科學館附近。' },
+                        { time: '12:00', name: '堺東観光案内所', type: 'sight', tag: '午餐點', note: '建議在此站內/站前快速購買午餐/輕食。' },
+                        { time: '12:30', name: '岸和田站', type: 'transport', note: '搭乘南海高野線/本線，目標 13:15 抵達。' },
+                        { time: '13:15', name: '岸和田駅前観光案内所', type: 'sight', tag: '關門點', note: '重要：人孔蓋卡領取點 (09:00–17:00)。停留時間不得超過 15 分鐘！' },
+                        { time: '13:30', name: '貝塚站', type: 'transport', note: '搭乘南海本線，目標 13:40 抵達。' },
+                        { time: '13:40', name: 'まちの駅かいづか', type: 'sight', tag: '關門點', note: '人孔蓋卡領取點 (10:00–19:00)。停留時間不得超過 15 分鐘！' },
+                        { time: '13:55', name: '泉佐野站', type: 'transport', note: '搭乘南海空港線，目標 14:05 抵達。' },
+                        { time: '14:05', name: '泉佐野市観光情報センター', type: 'sight', tag: '關門點', note: '警告：這是行程中最早關門點之一 (10:00–16:00)，必須在此時段內完成領取！' },
+                        { time: '14:20', name: '關西國際機場 (KIX)', type: 'transport', note: '搭乘南海空港線，目標 14:35 抵達 KIX。' },
+                        { time: '14:35', name: '關西國際機場 (KIX) T1', type: 'transport', tag: '終點', note: '重要：起飛時間 16:05 (CX565)，此時間為預計抵達 Check-in 櫃檯的時間。' },
+                        { time: '18:30', name: '台灣桃園國際機場 (TPE)', type: 'transport', note: '抵達' },
+                    ]
+                }
+            ]), []);
+
+            const SNOWY_KYOTO_BG = 'https://images.unsplash.com/photo-1549419163-f2732924375b?q=80&w=1974&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D';
+
+            return (
+                <div 
+                    className="min-h-screen font-sans text-stone-800 pb-20 bg-cover bg-center bg-fixed" 
+                    style={{ backgroundImage: `url('${SNOWY_KYOTO_BG}')` }}
+                >
+                    <header className="sticky top-0 z-10 bg-white/70 backdrop-blur-sm border-b border-stone-200 px-4 py-4 shadow-md">
+                        <div className="flex justify-between items-center max-w-2xl mx-auto">
+                            <div>
+                                <h1 className="text-xl font-bold text-stone-900 tracking-wide">關西九日遊</h1>
+                                <p className="text-xs text-stone-500">數位導遊與協作記帳</p>
+                            </div>
+                            <div className="bg-indigo-50 p-2 rounded-full">
+                                <Plane className="w-5 h-5 text-indigo-600" />
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="max-w-2xl mx-auto p-4 space-y-4">
+                        {isAuthReady && (
+                            <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 text-xs text-stone-600 flex flex-wrap items-center gap-2">
+                                <User className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                                <span className="font-bold text-blue-800">系統用戶 ID:</span>
+                                <span className="font-mono text-stone-700 break-all ml-auto">
+                                    {userId ? userId : '連線中...'}
+                                </span>
+                                <span className={`font-bold ml-2 ${userId ? 'text-green-600' : 'text-amber-600'}`}>
+                                    {userId ? '已連線' : '未連線'}
+                                </span>
+                            </div>
+                        )}
+                        
+                        {activeTab === 'itinerary' && (
+                            <div className="space-y-4">
+                                {itineraryData.map((day, index) => (
+                                    <div 
+                                        key={day.id} 
+                                        ref={el => dayRefs.current[index] = el}
+                                        className="bg-white rounded-2xl shadow-sm border border-stone-100 overflow-hidden transition-all duration-300"
+                                    >
+                                        <div 
+                                            onClick={() => toggleDay(index)}
+                                            className={`p-4 flex justify-between items-center cursor-pointer ${expandedDay === index ? 'bg-indigo-50/50' : 'bg-white'}`}
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className="bg-stone-100 rounded-lg p-2 text-center min-w-[3.5rem]">
+                                                    <span className="block text-xs font-bold text-stone-500">{day.day.split(' ')[0]}</span>
+                                                    <span className="block text-sm font-bold text-indigo-600">{day.day.split(' ')[1]}</span>
+                                                </div>
+                                                <div>
+                                                    <h3 className="font-bold text-stone-800">{day.title}</h3>
+                                                    <div className="flex items-center gap-2 text-xs text-stone-500 mt-1">
+                                                        <MapPin className="w-3 h-3" /> {day.location}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            {expandedDay === index ? <ChevronUp className="w-4 h-4 text-stone-400" /> : <ChevronDown className="w-4 h-4 text-stone-400" />}
+                                        </div>
+
+                                        {expandedDay === index && (
+                                            <div className="p-4 border-t border-stone-100 bg-white">
+                                                <div className="relative pl-4 border-l-2 border-stone-200 space-y-6">
+                                                    {day.spots.map((spot, sIndex) => {
+                                                        const isWarning = spot.note && (spot.note.includes('警告') || spot.note.includes('注意') || spot.note.includes('重要') || spot.note.includes('務必'));
+                                                        return (
+                                                            <div key={sIndex} className="relative">
+                                                                <div className={`absolute -left-[1.35rem] top-1 w-3 h-3 rounded-full border-2 border-white ${spot.type === 'transport' ? 'bg-emerald-400' : 'bg-indigo-400'}`}></div>
+                                                                <div className="flex justify-between items-start gap-2">
+                                                                    <div className="flex-1">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span className="text-xs font-mono text-stone-400">{spot.time}</span>
+                                                                            {spot.tag && (
+                                                                                <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold ${
+                                                                                    spot.tag === '必吃' ? 'border-rose-200 text-rose-600 bg-rose-50' :
+                                                                                    spot.tag === '關門點' ? 'border-amber-200 text-amber-600 bg-amber-50' :
+                                                                                    spot.tag === '終點' ? 'border-indigo-200 text-indigo-600 bg-indigo-50' :
+                                                                                    'border-stone-200 text-stone-600 bg-stone-50'
+                                                                                }`}>{spot.tag}</span>
+                                                                            )}
+                                                                        </div>
+                                                                        <button 
+                                                                            onClick={() => openMap(spot.name)}
+                                                                            className="font-bold text-stone-800 mt-0.5 text-left hover:text-indigo-600 transition-colors"
+                                                                        >
+                                                                            {spot.name}
+                                                                        </button>
+                                                                        {spot.note && (
+                                                                            <p className={`text-sm mt-1 ${isWarning ? 'text-red-700 font-bold bg-red-100/70 p-1.5 rounded-lg border border-red-200 shadow-sm' : 'text-stone-500'}`}>
+                                                                                {spot.note}
+                                                                            </p>
+                                                                        )}
+                                                                    </div>
+                                                                    <a 
+                                                                        href={getMapUrl(spot.name)}
+                                                                        target="_blank"
+                                                                        rel="noopener noreferrer"
+                                                                        className="p-2 bg-indigo-50 text-indigo-600 rounded-full hover:bg-indigo-100 transition-colors shadow-sm flex-shrink-0"
+                                                                        aria-label={`導航至 ${spot.name}`}
+                                                                    >
+                                                                        <Navigation className="w-4 h-4" />
+                                                                    </a>
+                                                                </div>
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {activeTab === 'stock_status' && <StockStatusQuery />}
+
+                        {activeTab === 'budget' && (
+                            <div className="space-y-4">
+                                <div className="text-xs text-center text-stone-500 p-2 bg-white rounded-lg border border-stone-100 flex items-center justify-center gap-1">
+                                    <Maximize className="w-3 h-3 inline mr-1" />
+                                    <span className="font-bold text-indigo-600">協作模式:</span> 資料即時同步到雲端 Firestore 資料庫。
+                                </div>
+                                {!userName ? (
+                                    <UserNameSetup 
+                                        nameInput={nameInput}
+                                        setNameInput={setNameInput}
+                                        handleSetUserName={handleSetUserName}
+                                        showNameWarning={showNameWarning}
+                                    />
+                                ) : (
+                                    <div className="text-center p-2 bg-indigo-50 rounded-lg border border-indigo-200">
+                                        <p className="text-sm text-indigo-700 font-medium">
+                                            目前記帳名稱: <span className="font-bold">{userName}</span> 
+                                        </p>
+                                    </div>
+                                )}
+                                <div className="bg-indigo-600 p-6 rounded-2xl shadow-md text-white">
+                                    <p className="text-indigo-200 text-sm mb-1">目前總支出</p>
+                                    <h2 className="text-4xl font-bold">¥ {totalBudget.toLocaleString()}</h2>
+                                </div>
+                                <div className="bg-white p-5 rounded-2xl shadow-sm border border-stone-100">
+                                    <h3 className="font-bold text-stone-800 mb-3 flex items-center gap-2">
+                                        <DollarSign className="w-4 h-4" /> 新增記帳
+                                    </h3>
+                                    <div className="flex gap-2 mb-2">
+                                        <input 
+                                            type="text" 
+                                            placeholder="項目 (如: 章魚燒)" 
+                                            className="flex-1 p-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                            value={newExpense.item}
+                                            onChange={(e) => setNewExpense(prev => ({...prev, item: e.target.value}))}
+                                            disabled={!userName || !userId}
+                                        />
+                                        <input 
+                                            type="number" 
+                                            placeholder="¥ 金額" 
+                                            className="w-24 p-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                            value={newExpense.cost}
+                                            onChange={(e) => setNewExpense(prev => ({...prev, cost: e.target.value}))}
+                                            disabled={!userName || !userId}
+                                        />
+                                    </div>
+                                    <button 
+                                        onClick={handleAddExpense}
+                                        className={`w-full py-2 rounded-lg text-sm font-bold transition-colors ${(!userName || !userId) ? 'bg-stone-400 cursor-not-allowed' : 'bg-stone-800 text-white hover:bg-stone-700'}`}
+                                        disabled={!userName || !userId}
+                                    >
+                                        {(userId && userName) ? '新增一筆 (雲端同步)' : '請先設定名稱並等待連線'}
+                                    </button>
+                                </div>
+                                <div className="bg-white rounded-2xl shadow-sm border border-stone-100 overflow-hidden">
+                                    <div className="p-4 bg-stone-50 border-b border-stone-200 flex justify-between items-center">
+                                        <h3 className="font-bold text-stone-700">支出明細 (即時同步)</h3>
+                                    </div>
+                                    <div className="divide-y divide-stone-100">
+                                        {expenses.length > 0 ? (
+                                            expenses.map((ex) => (
+                                                <div key={ex.id} className="p-4 flex justify-between items-center hover:bg-stone-50 transition-colors">
+                                                    <div className="flex flex-col">
+                                                        <span className="text-stone-800 font-medium">{ex.item}</span>
+                                                        <span className="text-xs text-stone-400 mt-0.5">記帳者: <span className="font-mono text-stone-500">{ex.userName}</span></span>
+                                                    </div>
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="text-stone-600 font-mono">¥ {(ex.cost || 0).toLocaleString()}</span>
+                                                        <button 
+                                                            onClick={() => handleDeleteExpense(ex.id)}
+                                                            className="text-red-400 hover:text-red-600 transition-colors p-1 rounded-full hover:bg-red-100"
+                                                            aria-label={`刪除 ${ex.item}`}
+                                                            disabled={!userId} 
+                                                        >
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <div className="p-8 text-center text-stone-400 text-sm">
+                                                {!isAuthReady ? '正在連接資料庫...' : '尚未有記帳資料'}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    <nav className="fixed bottom-0 w-full bg-white/95 backdrop-blur border-t border-stone-200 pb-safe">
+                        <div className="flex justify-around items-center h-16 max-w-2xl mx-auto">
+                            <button onClick={() => setActiveTab('itinerary')} className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${activeTab === 'itinerary' ? 'text-indigo-600' : 'text-stone-400'}`}>
+                                <Calendar className="w-5 h-5" />
+                                <span className="text-[10px] font-medium">行程</span>
+                            </button>
+                            <button onClick={() => setActiveTab('stock_status')} className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${activeTab === 'stock_status' ? 'text-indigo-600' : 'text-stone-400'}`}>
+                                <Map className="w-5 h-5" /> 
+                                <span className="text-[10px] font-medium">在庫状況</span>
+                            </button>
+                            <button onClick={() => setActiveTab('budget')} className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${activeTab === 'budget' ? 'text-indigo-600' : 'text-stone-400'}`}>
+                                <Wallet className="w-5 h-5" />
+                                <span className="text-[10px] font-medium">記帳</span>
+                            </button>
+                        </div>
+                    </nav>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<KansaiTravelApp />);
+    </script>
+</body>
+</html>
